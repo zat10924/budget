@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>قائمة الطلبات المنزلية - تدبير مصروف البيت</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f3f6fb; --surface: #fff; --ink: #17243b; --ink-2: #68758b; --line: #e2e8f0;
+  --accent: #176b63; --accent-ink: #fff; --accent-soft: #dff3ee;
+  --good: #168253; --good-bg: #e3f6eb; --warn: #946008; --warn-bg: #fff3d8; --bad: #b8323b; --bad-bg: #ffeaeb;
+  font-family: 'IBM Plex Sans Arabic', sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); padding: 20px; line-height: 1.6; }
+.container { max-width: 680px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 20px; box-shadow: 0 7px 22px rgba(29,48,76,.05); }
+h1 { font-size: 22px; margin: 0 0 4px; color: var(--accent); }
+p.desc { color: var(--ink-2); font-size: 14px; margin: 0 0 16px; }
+.btn { min-height: 44px; padding: 10px 18px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.sm { min-height: 38px; padding: 6px 14px; font-size: 13px; }
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.field label { font-weight: 600; font-size: 14px; }
+.in { width: 100%; min-height: 44px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+.pill { font: 600 11px/1 sans-serif; padding: 5px 9px; border-radius: 999px; white-space: nowrap; }
+.pill.good { background: var(--good-bg); color: var(--good); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.item-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.item-row:last-child { border-bottom: 0; }
+.empty { padding: 30px; text-align: center; color: var(--ink-2); border: 2px dashed var(--line); border-radius: 16px; }
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 40; }
+.dlg { position: fixed; left: 0; right: 0; bottom: 0; margin: auto; width: min(100%, 500px); background: var(--surface); border-radius: 20px 20px 0 0; padding: 20px; z-index: 41; display: flex; flex-direction: column; gap: 12px; }
+.dlg-h { display: flex; justify-content: space-between; align-items: center; }
+#toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 20px; background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; opacity: 0; transition: opacity .2s; z-index: 100; pointer-events: none; }
+#toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <div>
+        <h1>قائمة الطلبات المنزلية</h1>
+        <p class="desc" style="margin:0">مزامنة فورية بين الهاتفين • ربط تلقائي بالميزانية والمصروفات</p>
+      </div>
+      <button class="btn primary sm" onclick="openShopModal()">+ طلب جديد</button>
+    </div>
+    
+    <h3 style="font-size:16px; margin:16px 0 8px;">الطلبات المعلقة</h3>
+    <div id="pendingList" style="display:flex; flex-direction:column;"></div>
+
+    <h3 style="font-size:16px; margin:24px 0 8px;">الطلبات التي تم شراؤها</h3>
+    <div id="purchasedList" style="display:flex; flex-direction:column;"></div>
+  </div>
+</div>
+
+<div id="dlgRoot"></div>
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+const sb = window.supabase.createClient('https://aaqjspyyycxqfxpjmrwq.supabase.co','sb_publishable_jJgCxB6NugmMHa9C6Q04ug_OZmldH_8');
+let items = [], categories = [], householdId = null;
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c =>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = n => Number(n||0).toLocaleString('en-US');
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.className='show'; setTimeout(()=>t.className='', 3000); }
+
+async function init(){
+  // جلب أول بيت متاح للمستخدم الحالي
+  const { data: { user } } = await sb.auth.getUser();
+  if(!user){ alert('يرجى تسجيل الدخول أولاً في تطبيق الميزانية الرئيسي.'); return; }
+  const { data: mem } = await sb.from('household_members').select('household_id').eq('user_id', user.id);
+  if(!mem || !mem.length){ alert.textContent='لا توجد بيانات بيت مرتبطة بهذا الحساب.'; return; }
+  householdId = mem[0].household_id;
+
+  // جلب الأقسام المالية
+  const { data: setRow } = await sb.from('budget_settings').select('data').eq('household_id', householdId).maybeSingle();
+  if(setRow && setRow.data && setRow.data.cats) categories = setRow.data.cats;
+
+  loadItems();
+  
+  // تفعيل Realtime للمزامنة الفورية
+  sb.channel('shop_realtime')
+    .on('postgres_changes', {event: '*', schema: 'public', table: 'shopping_list', filter: 'household_id=='+householdId}, () => loadItems())
+    .subscribe();
+}
+
+async function loadItems(){
+  if(!householdId) return;
+  const { data } = await sb.from('shopping_list').select('*').eq('household_id', householdId).order('created_at', {ascending:false});
+  items = data || [];
+  render();
+}
+
+function render(){
+  const pending = items.filter(i => i.status === 'pending');
+  const purchased = items.filter(i => i.status === 'purchased');
+
+  $('#pendingList').innerHTML = pending.length ? pending.map(i => itemRow(i)).join('') : '<div class="empty">لا توجد طلبات معلقة حالياً</div>';
+  $('#purchasedList').innerHTML = purchased.length ? purchased.map(i => itemRow(i)).join('') : '<div class="empty">لا توجد طلبات مشراة سابقة</div>';
+}
+
+function itemRow(i){
+  const isP = i.status === 'purchased';
+  const cat = categories.find(c => c.id === i.category_id) || {name: 'غير محدد'};
+  return `<div class="item-row">
+    <div style="flex:1; min-width:0;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <b>${esc(i.item_name)}</b>
+        <span class="pill ${isP?'good':'warn'}">${isP?'تم الشراء':'معلق'}</span>
+      </div>
+      <small style="color:var(--ink-2)">الكمية: ${esc(i.quantity||'1')}${i.notes?' · ملاحظات: '+esc(i.notes):''}${i.estimated_price?' · تقديري: '+fmt(i.estimated_price)+' ج.م':''}${isP?' · الفعلي: '+fmt(i.actual_price)+' ج.م ('+esc(cat.name)+')':''}</small>
+    </div>
+    <div style="display:flex; gap:6px; align-items:center;">
+      ${!isP?`<button class="btn primary sm" onclick="openBuyModal('${i.id}')">تم الشراء</button>`:''}
+      <button class="btn sm" style="color:var(--bad)" onclick="deleteItem('${i.id}')">حذف</button>
+    </div>
+  </div>`;
+}
+
+function openShopModal(){
+  $('#dlgRoot').innerHTML = `<div class="scrim" onclick="closeDlg()"></div>
+  <form class="dlg" onsubmit="addShopItem(event)">
+    <div class="dlg-h"><h2 style="margin:0; font-size:18px">إضافة طلب جديد</h2><button type="button" class="btn sm" onclick="closeDlg()">✕</button></div>
+    <div class="field"><label>اسم العنصر *</label><input class="in" id="sName" required placeholder="مثال: طماطم، دجاج، مسحوق غسيل"></div>
+    <div class="field"><label>الكمية</label><input class="in" id="sQty" placeholder="مثال: 2 كيلو، 1 كرتونة" value="1"></div>
+    <div class="field"><label>السعر التقديري (اختياري)</label><input class="in" id="sEst" inputmode="decimal" placeholder="0"></div>
+    <div class="field"><label>ملاحظات</label><input class="in" id="sNotes" placeholder="مثال: من العبد أو السوق"></div>
+    <button class="btn primary" type="submit">إضافة للقائمة</button>
+  </form>`;
+}
+
+async function addShopItem(e){
+  e.preventDefault();
+  const name = $('#sName').value.trim();
+  if(!name) return;
+  const obj = {
+    household_id: householdId,
+    item_name: name,
+    quantity: $('#sQty').value.trim() || '1',
+    estimated_price: parseFloat($('#sEst').value) || null,
+    notes: $('#sNotes').value.trim(),
+    status: 'pending'
+  };
+  const {error} = await sb.from('shopping_list').insert([obj]);
+  if(error){ toast('تعذر الإضافة: '+error.message); return; }
+  closeDlg();
+  loadItems();
+  toast('تمت إضافة الطلب بنجاح');
+}
+
+function openBuyModal(id){
+  const item = items.find(i => i.id === id);
+  if(!item) return;
+  $('#dlgRoot').innerHTML = `<div class="scrim" onclick="closeDlg()"></div>
+  <form class="dlg" onsubmit="confirmBuy(event, '${id}')">
+    <div class="dlg-h"><h2 style="margin:0; font-size:18px">تأكيد شراء: ${esc(item.item_name)}</h2><button type="button" class="btn sm" onclick="closeDlg()">✕</button></div>
+    <div class="field"><label>المبلغ الفعلي المدفوع (ج.م) *</label><input class="in" id="bAmt" inputmode="decimal" required value="${item.estimated_price||''}"></div>
+    <div class="field"><label>القسم المالي *</label><select class="in" id="bCat">${categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+    <button class="btn primary" type="submit">تأكيد وتسجيل كمصروف بالميزانية</button>
+  </form>`;
+}
+
+async function confirmBuy(e, id){
+  e.preventDefault();
+  const actual_price = parseFloat($('#bAmt').value);
+  if(!(actual_price > 0)){ toast('أدخل مبلغاً صحيحاً'); return; }
+  const category_id = $('#bCat').value;
+  const item = items.find(i => i.id === id);
+
+  // 1. تحديث الطلب إلى تم الشراء
+  const {error} = await sb.from('shopping_list').update({
+    status: 'purchased',
+    actual_price,
+    category_id
+  }).eq('id', id);
+
+  if(error){ toast('تعذر تحديث الطلب'); return; }
+
+  // 2. تسجيل المعاملة المالية في جدول المصروفات (لخصمها من الميزانية تلقائياً)
+  const today = new Date().toISOString().split('T')[0];
+  const tx = {
+    id: 'e_' + Date.now().toString(36),
+    amount: actual_price,
+    cat: category_id,
+    note: item.item_name + (item.quantity ? ' ('+item.quantity+')' : ''),
+    date: today,
+    period: today.slice(0,8) + '05', // أو حساب فترة المدة المناسبة
+    ts: Date.now()
+  };
+  
+  // حساب الفترة بدقة حسب نظام التطبيق (5 إلى 20 أو 20 إلى 5)
+  const d = new Date(), day = d.getDate();
+  let pDate = new Date(d.getFullYear(), d.getMonth(), day >= 20 ? 20 : (day >= 5 ? 5 : 20));
+  if(day < 5) pDate.setMonth(pDate.getMonth() - 1);
+  tx.period = pDate.toISOString().split('T')[0];
+
+  await sb.from('budget_expenses').upsert({ household_id: householdId, id: tx.id, data: tx }, { onConflict: 'household_id,id' });
+
+  closeDlg();
+  loadItems();
+  toast('تم الشراء وتسجيل المصروف وخصمه من الميزانية بنجاح');
+}
+
+async function deleteItem(id){
+  if(!confirm('هل تريد حذف هذا الطلب؟')) return;
+  await sb.from('shopping_list').delete().eq('id', id);
+  loadItems();
+  toast('تم الحذف');
+}
+
+function closeDlg(){ $('#dlgRoot').innerHTML = ''; }
+
+init();
+</script>
+</body>
+</html>
