@@ -1090,5 +1090,21 @@ async function init(){
 }
 setInterval(checkAlerts,60000);init();
 })();
+  // --- دالات ميزة قائمة الطلبات الجديدة ---
+async function fetchShoppingList() {
+  const { data } = await sb.from('shopping_list').select('*').order('created_at', { ascending: false });
+  if (data) { shoppingList = data; renderShoppingView(); }
+}
+
+async function handleAddShoppingItem(itemName, qty, estPrice, notes) {
+  await sb.from('shopping_list').insert({
+    household_id: S.householdId,
+    item_name: itemName,
+    quantity: qty,
+    estimated_price: estPrice,
+    notes: notes,
+    status: 'Pending'
+  });
+}
 </script>
 </body></html>
